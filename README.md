@@ -88,11 +88,11 @@ El servidor MCP se inicia automáticamente en el puerto **8001** junto con el pr
 Para que la IA pueda usar las herramientas de Django, debes conectar Open WebUI con el servidor MCP (esto se hace una sola vez):
 
 1. Accede al panel de administración de Open WebUI: [http://localhost:3100/admin](https://www.google.com/search?q=http://localhost:3100/admin)
-2. Ve a **Settings** \> **Connections**.
+2. Ve a **Settings** \> **External Tools**.
 3. Busca la sección **MCP**.
 4. Añade una nueva conexión con los siguientes datos:
-   * **URL:** http://ai-agriculture:8001/mcp/sse
-   * *(Nota: Asegúrate de incluir /sse al final).*
+   * **URL:** http://ai-agriculture:8001/mcp
+   * *(Nota: Asegúrate de incluir /mcp al final).*
 5. Guarda la configuración.
 
 ## **👩‍💻 Flujo de Trabajo (Desarrollo)**
