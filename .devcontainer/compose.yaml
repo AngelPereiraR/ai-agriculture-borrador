@@ -1,0 +1,75 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # Comment out lines 8-10 for non-NVIDIA GPU or Mac users
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - ai-agriculture
+    ports:
+      - "11434:11434"
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    # Disable for Mac users with GPU usage
+    depends_on: [ollama]
+    env_file:
+      - ../.env
+    volumes:
+      - openwebui_data:/app/backend/data
+    networks:
+      - ai-agriculture
+    ports:
+      - "3100:8080"
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    restart: always
+    env_file:
+      - ../.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai-agriculture
+    ports:
+      - "5432:5432"
+
+  ai-agriculture:
+    build:
+      context: ../
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ../:/workspaces/ai-agriculture
+    networks:
+      ai-agriculture:
+        aliases:
+          - devcontainer
+          - debug-ai-agriculture
+    depends_on:
+      - db
+    env_file:
+      - ../.env
+    environment:
+      # Forzamos el host para que coincida con el nombre del servicio en Docker
+      - POSTGRES_HOST=db
+      # IMPORTANTE: Si tu settings.py busca 'DB_NAME' en vez de 'POSTGRES_DB',
+      # descomenta la línea de abajo para mapearlo manualmente aquí,
+      # o actualiza tu settings.py para leer POSTGRES_DB.
+      # - DB_NAME=${POSTGRES_DB:-agriculture_db}
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+volumes:
+  ollama_models:
+  openwebui_data:
+  postgres_data:
+
+networks:
+  ai-agriculture:
+    name: ai-agriculture
+    driver: bridge

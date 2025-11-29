@@ -1,0 +1,59 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # Comment out lines 8-10 for non-NVIDIA GPU or Mac users
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - ai-agriculture-prod
+    ports:
+      - "11435:11434"
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    # Disable for Mac users with GPU usage
+    depends_on: [ollama]
+    env_file:
+      - ../.env.prod
+    volumes:
+      - openwebui_data:/app/backend/data
+    networks:
+      - ai-agriculture-prod
+    ports:
+      - "3101:8080"
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    restart: always
+    env_file:
+      - ../.env.prod
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai-agriculture-prod
+    ports:
+      - "5433:5432"
+
+  ai-agriculture-prod:
+    image: agro:0.1
+    env_file:
+      - ../.env.prod
+    networks:
+      - ai-agriculture-prod
+    ports:
+      - "8002:8000"
+      - "8003:8001"
+volumes:
+  ollama_models:
+  openwebui_data:
+  postgres_data:
+
+networks:
+  ai-agriculture-prod:
+    name: ai-agriculture-prod
+    driver: bridge

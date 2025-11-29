@@ -1,0 +1,33 @@
+{
+  "name": "AI Agent Workshop",
+  "dockerComposeFile": ["./compose.yaml"],
+  "service": "ai-agriculture",
+  "workspaceFolder": "/workspaces/ai-agriculture",
+  "customizations": {
+      "vscode": {
+          "extensions": [
+            "ms-vscode.makefile-tools",
+            "ExodiusStudios.comment-anchors",
+            "mermaidchart.vscode-mermaid-chart",
+            "ms-kubernetes-tools.vscode-kubernetes-tools",
+            "openai.chatgpt",
+            "ms-playwright.playwright",
+            "ms-python.python",
+            "mechatroner.rainbow-csv",
+            "grapecity.gc-excelviewer",
+            "shahilkumar.docxreader",
+            "tomoki1207.pdf",
+            "syncfusioninc.document-viewer-vscode-extensions",
+            "ckolkman.vscode-postgres",
+            "batisteo.vscode-django",
+            "github.vscode-pull-request-github"
+          ]
+      }
+  },
+  "postCreateCommand": "bash /workspaces/ai-agriculture/.devcontainer/post-create-command.sh",
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+  ],
+  "shutdownAction": "stopCompose"
+}

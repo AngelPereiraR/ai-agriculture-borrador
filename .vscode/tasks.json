@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "1. Run Django Server",
+      "type": "shell",
+      "command": "bash -c 'echo \"⏳ Esperando a que termine la instalación (post-create)...\"; while [ ! -f /tmp/workspace_ready ]; do sleep 2; done; echo \"🚀 Iniciando Django...\"; python src/manage.py runserver 0.0.0.0:8000'",
+      "presentation": {
+        "reveal": "always",
+        "group": "servers",
+        "panel": "dedicated"
+      },
+      "isBackground": true,
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": {
+        "owner": "python",
+        "pattern": {
+          "regexp": "^.*$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Iniciando Django...",
+          "endsPattern": "Quit the server with CONTROL-C."
+        }
+      }
+    },
+    {
+      "label": "2. Run MCP Server",
+      "type": "shell",
+      "command": "bash -c 'while [ ! -f /tmp/workspace_ready ]; do sleep 2; done; echo \"🤖 Iniciando MCP...\"; python src/manage.py run_mcp_server'",
+      "presentation": {
+        "reveal": "always",
+        "group": "servers",
+        "panel": "dedicated"
+      },
+      "isBackground": true,
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

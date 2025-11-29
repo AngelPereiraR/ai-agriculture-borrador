@@ -1,0 +1,8 @@
+crewai[tools]
+pytest
+httpx
+mcpo
+fastmcp
+openapi-python-client
+django
+psycopg2-binary
