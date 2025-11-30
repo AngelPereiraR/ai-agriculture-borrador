@@ -72,7 +72,7 @@ class RegistroTransporte(models.Model):
         related_name="transportes_origen_persona",
     )
     destinatario = models.ForeignKey(
-        "gestion.Persona",
+        "gestion.Destinatario",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,

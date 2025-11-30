@@ -21,7 +21,9 @@ from gestion.models import (
     RegistroMovimientoProducto,
     AnalisisLaboratorio,
     Asesor,
-    Personal
+    Personal,
+    Titular,
+    Direccion
 )
 
 # Configuración de logging
@@ -40,33 +42,135 @@ class Command(BaseCommand):
         # ==============================================================================
         # 1. HERRAMIENTAS DE CONFIGURACIÓN Y MAESTROS (Configuración Inicial)
         # ==============================================================================
+        
+        @mcp.tool()
+        async def crear_titular(
+            nombre: str,
+            nif: str,
+            registro_explotacion: str,
+            apellidos: str = "",
+            tipo_documento: str = "DNI",
+            cif_explotacion: str = "",
+            # Campos de Dirección y Contacto
+            direccion_via: str = "",
+            direccion_numero: str = "",
+            municipio: str = "",
+            provincia: str = "",
+            codigo_postal: str = "",
+            telefono: str = "",
+            movil: str = "",
+            email: str = ""
+        ) -> str:
+            """
+            Crea un registro en el modelo Titular y su Dirección asociada.
+            Comando asociado: /nuevo_titular
+            """
+            try:
+                # 1. Verificar existencia
+                if await sync_to_async(Titular.objects.filter(documento=nif).exists)():
+                    return f"Error: Ya existe un titular con el documento {nif}."
+
+                # 2. Crear Dirección (si se proporcionan datos básicos)
+                direccion_obj = None
+                if direccion_via or municipio or provincia:
+                    direccion_obj = await sync_to_async(Direccion.objects.create)(
+                        nombre_via=direccion_via,
+                        numero=direccion_numero,
+                        localidad=municipio,
+                        provincia=provincia,
+                        codigo_postal=codigo_postal,
+                        telefono=telefono,
+                        movil=movil,
+                        email=email
+                    )
+
+                # 3. Crear Titular
+                obj = await sync_to_async(Titular.objects.create)(
+                    nombre=nombre,
+                    apellidos=apellidos,
+                    documento=nif,
+                    tipo_documento=tipo_documento.upper(),
+                    registro_explotacion=registro_explotacion,
+                    cif_explotacion=cif_explotacion if cif_explotacion else None,
+                    direccion=direccion_obj
+                )
+                
+                info_dir = f" con dirección en {municipio}" if direccion_obj else " sin dirección"
+                return f"Titular creado: {obj.nombre} {obj.apellidos or ''} (REGA: {obj.registro_explotacion}){info_dir}."
+
+            except Exception as e:
+                return f"Error creando titular: {str(e)}"
 
         @mcp.tool()
         async def configurar_explotacion_principal(
             nombre_comercial: str,
             nif_titular: str,
-            registro_nacional: str
+            registro_nacional: str,
+            registro_autonomico: str = "",
+            nombre_titular: str = "",
+            apellidos_titular: str = "",
+            cif_explotacion: str = "",
+            # Campos de Dirección
+            direccion_via: str = "",
+            direccion_numero: str = "",
+            municipio: str = "",
+            provincia: str = "",
+            codigo_postal: str = ""
         ) -> str:
             """
-            Configura la Explotación Agrícola principal y su titular.
-            Comando asociado: /config_inicial
+            Configura la Explotación Agrícola principal, su titular y dirección.
+            Comando asociado: /config_explotacion
             """
             try:
-                titular, created = await sync_to_async(Persona.objects.get_or_create)(
-                    nif=nif_titular,
-                    defaults={'nombre': f"Titular {nif_titular}"}
+                # 1. Crear Dirección de la Explotación (si hay datos)
+                direccion_obj = None
+                if direccion_via or municipio or provincia:
+                    direccion_obj = await sync_to_async(Direccion.objects.create)(
+                        nombre_via=direccion_via,
+                        numero=direccion_numero,
+                        localidad=municipio,
+                        provincia=provincia,
+                        codigo_postal=codigo_postal
+                    )
+
+                # 2. Crear o recuperar el Titular
+                nombre_t = nombre_titular if nombre_titular else f"Titular {nif_titular}"
+                
+                titular, created = await sync_to_async(Titular.objects.get_or_create)(
+                    documento=nif_titular,
+                    defaults={
+                        'nombre': nombre_t,
+                        'apellidos': apellidos_titular,
+                        'tipo_documento': 'DNI',
+                        'registro_explotacion': registro_nacional,
+                        'cif_explotacion': cif_explotacion
+                    }
                 )
                 
+                # Actualización de titular si ya existía
+                if not created:
+                    update_t = False
+                    if nombre_titular and titular.nombre != nombre_titular:
+                        titular.nombre = nombre_titular; update_t = True
+                    if apellidos_titular and titular.apellidos != apellidos_titular:
+                        titular.apellidos = apellidos_titular; update_t = True
+                    if update_t: await sync_to_async(titular.save)()
+
+                # 3. Crear o actualizar la Explotación
                 explotacion, created_exp = await sync_to_async(Explotacion.objects.update_or_create)(
                     nif=nif_titular,
                     defaults={
                         'nombre': nombre_comercial,
                         'numero_registro_nacional': registro_nacional,
+                        'numero_registro_autonomico': registro_autonomico,
                         'titular': titular,
+                        'direccion': direccion_obj, # Vinculamos la dirección creada
                         'tipo_representacion': 'PROPIETARIO'
                     }
                 )
-                return f"Explotación '{nombre_comercial}' configurada correctamente (ID: {explotacion.id})."
+                
+                info_dir = f" en {municipio}" if direccion_obj else ""
+                return f"Explotación '{nombre_comercial}' configurada{info_dir}. Titular: {titular.nombre}."
             except Exception as e:
                 return f"Error en configuración inicial: {str(e)}"
 
@@ -75,7 +179,14 @@ class Command(BaseCommand):
             nombre_comun: str,
             referencia_sigpac: str,
             cultivo: str,
-            superficie_ha: float
+            superficie_ha: float,
+            poligono: str = "",
+            parcela: str = "",
+            recinto: str = "",
+            uso_sigpac: str = "",
+            variedad: str = "",
+            secano_regadio: str = "",
+            aire_protegido: str = ""
         ) -> str:
             """
             Da de alta una nueva parcela.
@@ -84,16 +195,23 @@ class Command(BaseCommand):
             try:
                 explotacion = await sync_to_async(Explotacion.objects.first)()
                 if not explotacion:
-                    return "Error: No hay una explotación configurada. Usa /config_inicial primero."
+                    return "Error: No hay una explotación configurada. Usa /config_explotacion primero."
 
                 obj = await sync_to_async(Parcela.objects.create)(
                     explotacion=explotacion,
                     referencia_sigpac=referencia_sigpac,
+                    poligono=poligono,
+                    parcela=parcela,
+                    recinto=recinto,
+                    uso_sigpac=uso_sigpac,
                     especie=cultivo,
+                    variedad=variedad,
+                    secano_regadio=secano_regadio,
+                    aire_protegido=aire_protegido,
                     superficie_cultivada=superficie_ha,
                     superficie_sigpac=superficie_ha
                 )
-                return f"Parcela creada: {cultivo} en {referencia_sigpac} ({superficie_ha} ha) - Alias: {nombre_comun}"
+                return f"Parcela creada: {cultivo} {variedad} en {referencia_sigpac} ({superficie_ha} ha) - Alias: {nombre_comun}"
             except Exception as e:
                 return f"Error creando parcela: {str(e)}"
 
@@ -101,36 +219,69 @@ class Command(BaseCommand):
         async def crear_cliente_destinatario(
             nombre_fiscal: str,
             nif: str,
-            matricula_vehiculo_preferido: str = None
+            matricula_vehiculo_preferido: str = None,
+            # Campos de Dirección opcionales
+            direccion_via: str = "",
+            direccion_numero: str = "",
+            municipio: str = "",
+            provincia: str = "",
+            codigo_postal: str = ""
         ) -> str:
             """
             Crea un cliente/destinatario y le asigna un vehículo preferido para automatizar DATs.
             Comando asociado: /nuevo_cliente
             """
             try:
+                # 1. Gestionar Vehículo
                 vehiculo = None
                 if matricula_vehiculo_preferido:
                     vehiculo = await sync_to_async(Vehiculo.objects.filter(matricula=matricula_vehiculo_preferido).first)()
                     if not vehiculo:
                         return f"Error: El vehículo {matricula_vehiculo_preferido} no existe. Regístralo con /nuevo_vehiculo."
 
-                persona, _ = await sync_to_async(Persona.objects.get_or_create)(
-                    nif=nif,
-                    defaults={'nombre': nombre_fiscal}
-                )
+                # 2. Crear Dirección (si aplica)
+                direccion_obj = None
+                if direccion_via or municipio or provincia:
+                    direccion_obj = await sync_to_async(Direccion.objects.create)(
+                        nombre_via=direccion_via,
+                        numero=direccion_numero,
+                        localidad=municipio,
+                        provincia=provincia,
+                        codigo_postal=codigo_postal
+                    )
 
+                # 3. Crear Destinatario (Modelo específico)
                 destinatario, created = await sync_to_async(Destinatario.objects.get_or_create)(
                     documento=nif,
                     defaults={
                         'nombre': nombre_fiscal,
-                        'transporte_asignado': vehiculo
+                        'tipo_documento': 'DNI', # Valor por defecto
+                        'transporte_asignado': vehiculo,
+                        'direccion': direccion_obj
                     }
                 )
                 
-                if not created and vehiculo:
-                    destinatario.transporte_asignado = vehiculo
-                    await sync_to_async(destinatario.save)()
+                # Actualización si ya existía
+                update_needed = False
+                if not created:
+                    if vehiculo and destinatario.transporte_asignado != vehiculo:
+                        destinatario.transporte_asignado = vehiculo
+                        update_needed = True
+                    if direccion_obj and destinatario.direccion != direccion_obj:
+                        destinatario.direccion = direccion_obj
+                        update_needed = True
+                    if update_needed:
+                        await sync_to_async(destinatario.save)()
                 
+                # 4. Sincronizar con Persona (para que RegistroTransporte funcione con FK a Persona)
+                await sync_to_async(Persona.objects.get_or_create)(
+                    nif=nif,
+                    defaults={
+                        'nombre': nombre_fiscal,
+                        'direccion': direccion_obj
+                    }
+                )
+
                 info_vehiculo = f"Vehículo asignado: {vehiculo.matricula}" if vehiculo else "Sin vehículo asignado"
                 return f"Cliente '{nombre_fiscal}' configurado. {info_vehiculo}"
             except Exception as e:
@@ -140,7 +291,8 @@ class Command(BaseCommand):
         async def crear_vehiculo(
             matricula: str,
             tipo: str,
-            marca_modelo: str = ""
+            marca: str = "",
+            modelo: str = ""
         ) -> str:
             """
             Registra un vehículo.
@@ -149,28 +301,35 @@ class Command(BaseCommand):
             try:
                 obj = await sync_to_async(Vehiculo.objects.create)(
                     matricula=matricula,
-                    tipo=tipo.upper(),
-                    marca=marca_modelo
+                    tipo=tipo.upper(), # TRACTOR, COCHE, REMOLQUE, FURGONETA
+                    marca=marca,
+                    modelo=modelo
                 )
-                return f"Vehículo registrado: {obj.tipo} - {obj.matricula}"
+                return f"Vehículo registrado: {obj.tipo} - {obj.matricula} ({obj.marca} {obj.modelo})"
             except Exception as e:
                 return f"Error creando vehículo: {str(e)}"
 
         @mcp.tool()
         async def crear_maquina_roma(
             descripcion: str,
-            numero_roma: str,
-            nombre_explotacion: str = ""
+            numero_inscripcion_roma: str,
+            fecha_adquisicion: str = None,
+            fecha_ultima_inspeccion: str = None
         ) -> str:
             """
-            Registra maquinaria de aplicación (ROMA).
+            Registra maquinaria de aplicación (ROMA) con sus fechas.
             Comando asociado: /nueva_maquina
             """
             try:
                 explotacion = await sync_to_async(Explotacion.objects.first)()
+                if not explotacion:
+                    return "Error: No hay una explotación configurada."
+
                 obj = await sync_to_async(EquipoAplicacion.objects.create)(
                     descripcion=descripcion,
-                    numero_inscripcion_roma=numero_roma,
+                    numero_inscripcion_roma=numero_inscripcion_roma,
+                    fecha_adquisicion=fecha_adquisicion,
+                    fecha_ultima_inspeccion=fecha_ultima_inspeccion,
                     explotacion=explotacion
                 )
                 return f"Máquina registrada: {obj.descripcion} (ROMA: {obj.numero_inscripcion_roma})"
@@ -180,34 +339,44 @@ class Command(BaseCommand):
         @mcp.tool()
         async def crear_personal_aplicador(
             nombre: str,
-            dni: str,
+            documento: str,
+            apellidos: str = "",
+            sexo: str = "O",
+            tipo_documento: str = "DNI",
+            cargo: str = "",
+            habilitado_fitosanitarios: bool = False,
             telefono: str = "",
-            email: str = "",
-            nivel_carne: str = ""
+            email: str = ""
         ) -> str:
             """
-            Registra personal/aplicador con su nivel de carné.
+            Registra personal/aplicador con todos sus detalles.
             Comando asociado: /nuevo_personal
             """
             try:
+                # 1. Crear Persona (Base para FKs en DiarioActividad)
+                # Usamos 'nif' en Persona para mapear con 'documento' de Personal
                 persona, _ = await sync_to_async(Persona.objects.get_or_create)(
-                    nif=dni,
-                    defaults={'nombre': nombre, 'telefono': telefono, 'email': email}
+                    nif=documento,
+                    defaults={'nombre': f"{nombre} {apellidos}".strip(), 'telefono': telefono, 'email': email, 'sexo': sexo}
                 )
                 
-                habilitado = True if nivel_carne and nivel_carne.lower() != "ninguno" else False
-                
+                # 2. Crear Personal (Datos específicos de RRHH/Cualificación)
+                # Si no se especifica cargo pero se marca habilitado, inferir Aplicador
+                cargo_final = cargo if cargo else ("Aplicador" if habilitado_fitosanitarios else "Trabajador")
+
                 await sync_to_async(Personal.objects.create)(
                     nombre=nombre,
-                    apellidos="(Apellidos)", 
-                    documento=dni,
-                    tipo_documento="DNI",
-                    sexo="O",
-                    cargo=f"Aplicador - Nivel: {nivel_carne}",
-                    habilitado_fitosanitarios=habilitado
+                    apellidos=apellidos,
+                    documento=documento,
+                    tipo_documento=tipo_documento.upper(),
+                    sexo=sexo.upper(),
+                    cargo=cargo_final,
+                    habilitado_fitosanitarios=habilitado_fitosanitarios,
+                    telefono=telefono,
+                    email=email
                 )
                 
-                return f"Personal registrado: {nombre} (DNI: {dni}). Nivel: {nivel_carne}"
+                return f"Personal registrado: {nombre} {apellidos} (Doc: {documento}). Cargo: {cargo_final}"
             except Exception as e:
                 return f"Error registrando personal: {str(e)}"
 
@@ -241,19 +410,21 @@ class Command(BaseCommand):
         async def crear_transportista_externo(
             nombre: str,
             nif: str,
+            telefono: str = "",
             email: str = ""
         ) -> str:
             """
-            Registra un transportista externo.
+            Registra un transportista externo con sus datos de contacto.
             Comando asociado: /nuevo_transportista
             """
             try:
                 obj = await sync_to_async(Transportista.objects.create)(
                     nombre=nombre,
                     nif=nif,
+                    telefono=telefono,
                     email=email
                 )
-                return f"Transportista registrado: {nombre}"
+                return f"Transportista registrado: {nombre} (Tel: {telefono})"
             except Exception as e:
                 return f"Error creando transportista: {str(e)}"
 
@@ -264,27 +435,40 @@ class Command(BaseCommand):
         @mcp.tool()
         async def registrar_tratamiento(
             fecha: str,
-            nombre_parcela: str,
+            referencia_sigpac: str,
             producto: str,
             dosis: float,
             plaga: str,
+            dosis_text: str = "",
+            eficacia: str = "",
+            nombre_equipo: str = "",
             observaciones: str = ""
         ) -> str:
             """
             Registra una aplicación de fitosanitarios.
             Comando asociado: /tratamiento
             """
-            try:
-                parcela = await sync_to_async(Parcela.objects.filter(
-                    Q(referencia_sigpac__icontains=nombre_parcela) | Q(especie__icontains=nombre_parcela)
-                ).first)()
+            def _operacion_db():
+                # 1. Buscar Parcela
+                parcela = Parcela.objects.filter(
+                    Q(referencia_sigpac__icontains=referencia_sigpac) | Q(especie__icontains=referencia_sigpac)
+                ).select_related('explotacion').first()
                 
                 if not parcela:
-                    return f"Error: Parcela '{nombre_parcela}' no encontrada."
+                    return f"Error: Parcela '{referencia_sigpac}' no encontrada."
 
-                aplicador = await sync_to_async(Persona.objects.first)() 
+                # 2. Buscar Aplicador (Default - Primer habilitado)
+                aplicador = Persona.objects.filter(personal_profile__habilitado_fitosanitarios=True).first()
+                if not aplicador:
+                     aplicador = Persona.objects.first()
 
-                actividad = await sync_to_async(DiarioActividad.objects.create)(
+                # 3. Buscar Equipo (Opcional)
+                equipo = None
+                if nombre_equipo:
+                    equipo = EquipoAplicacion.objects.filter(descripcion__icontains=nombre_equipo).first()
+
+                # 4. Crear Registro
+                actividad = DiarioActividad.objects.create(
                     explotacion=parcela.explotacion,
                     fecha=fecha,
                     tipo="TRATAMIENTO",
@@ -292,70 +476,92 @@ class Command(BaseCommand):
                     superficie_tratada_ha=parcela.superficie_cultivada,
                     producto_nombre=producto,
                     dosis=dosis,
+                    dosis_text=dosis_text,
                     problema_fitosanitario=plaga,
+                    eficacia=eficacia,
+                    equipo=equipo,
                     observaciones=observaciones,
                     aplicador=aplicador
                 )
                 return f"Tratamiento registrado ID: {actividad.id}. {producto} contra {plaga} en {parcela.referencia_sigpac}."
+
+            try:
+                resultado = await sync_to_async(_operacion_db)()
+                return resultado
             except Exception as e:
                 return f"Error al registrar tratamiento: {str(e)}"
 
         @mcp.tool()
         async def registrar_riego(
             fecha: str,
-            nombre_parcela: str,
+            referencia_sigpac: str,
             tipo_actividad: str, # "Riego" o "Abonado"
             abono: str = "",
-            cantidad: float = 0.0
+            cantidad: float = 0.0,
+            unidad_cantidad: str = "",
+            hora_inicio: str = None,
+            hora_fin: str = None,
+            observaciones: str = ""
         ) -> str:
             """
-            Registra riego o fertilización.
+            Registra riego o fertilización con detalles de tiempo y dosis.
             Comando asociado: /riego
             """
-            try:
-                parcela = await sync_to_async(Parcela.objects.filter(
-                    Q(referencia_sigpac__icontains=nombre_parcela) | Q(especie__icontains=nombre_parcela)
-                ).first)()
+            def _operacion_db():
+                # 1. Buscar Parcela
+                parcela = Parcela.objects.filter(
+                    Q(referencia_sigpac__icontains=referencia_sigpac) | Q(especie__icontains=referencia_sigpac)
+                ).select_related('explotacion').first()
                 
                 if not parcela:
-                    return f"Error: Parcela '{nombre_parcela}' no encontrada."
+                    return f"Error: Parcela '{referencia_sigpac}' no encontrada."
 
                 tipo_db = "ABONADO" if "abono" in tipo_actividad.lower() or abono else "RIEGO"
                 
-                actividad = await sync_to_async(DiarioActividad.objects.create)(
+                # 2. Crear Registro
+                actividad = DiarioActividad.objects.create(
                     explotacion=parcela.explotacion,
                     fecha=fecha,
                     tipo=tipo_db,
                     parcela=parcela,
                     superficie_tratada_ha=parcela.superficie_cultivada,
-                    producto_nombre=abono,
+                    producto_nombre=abono, # Si es solo agua, esto estará vacío o indicará "Agua"
                     dosis=cantidad,
-                    observaciones=f"Registro de {tipo_actividad}"
+                    dosis_text=unidad_cantidad,
+                    hora_inicio=hora_inicio,
+                    hora_fin=hora_fin,
+                    observaciones=f"Registro de {tipo_actividad}. {observaciones}"
                 )
                 return f"Actividad de {tipo_db} registrada ID: {actividad.id}."
+
+            try:
+                resultado = await sync_to_async(_operacion_db)()
+                return resultado
             except Exception as e:
                 return f"Error al registrar riego: {str(e)}"
 
         @mcp.tool()
         async def registrar_siembra(
             fecha: str,
-            nombre_parcela: str,
+            referencia_sigpac: str,
             cultivo: str,
             kilos_semilla: float,
             producto_semilla: str = "",
-            registro_producto: str = ""
+            registro_producto: str = "",
+            observaciones: str = ""
         ) -> str:
             """
             Registra siembra con semilla tratada.
             Comando asociado: /siembra
             """
             try:
+                # Buscar parcela por referencia o cultivo (nombre común a veces coincide)
                 parcela = await sync_to_async(Parcela.objects.filter(
-                    Q(referencia_sigpac__icontains=nombre_parcela)
-                ).first)()
+                    Q(referencia_sigpac__icontains=referencia_sigpac) | Q(especie__icontains=referencia_sigpac)
+                ).select_related('explotacion').first)()
                 
                 if not parcela:
-                    return f"Error: Parcela '{nombre_parcela}' no encontrada."
+                    return f"Error: Parcela '{referencia_sigpac}' no encontrada."
 
                 obj = await sync_to_async(SemillaTratada.objects.create)(
                     explotacion=parcela.explotacion,
@@ -365,7 +571,8 @@ class Command(BaseCommand):
                     superficie_sembrada_ha=parcela.superficie_cultivada,
                     cantidad_semilla_kg=kilos_semilla,
                     producto_fitosanitario=producto_semilla,
-                    numero_registro=registro_producto
+                    numero_registro=registro_producto,
+                    observaciones=observaciones
                 )
                 return f"Siembra registrada: {cultivo} en {parcela.referencia_sigpac}. Tratamiento semilla: {producto_semilla}"
             except Exception as e:
@@ -375,23 +582,30 @@ class Command(BaseCommand):
         async def registrar_analisis(
             fecha: str,
             material: str,
+            cultivo: str,
+            numero_boletin: str,
             laboratorio: str,
             resultado: str
         ) -> str:
             """
-            Registra análisis de laboratorio.
+            Registra análisis de laboratorio completo.
             Comando asociado: /analisis
             """
             try:
                 explotacion = await sync_to_async(Explotacion.objects.first)()
+                if not explotacion:
+                     return "Error: No hay explotación configurada."
+
                 obj = await sync_to_async(AnalisisLaboratorio.objects.create)(
                     explotacion=explotacion,
                     fecha=fecha,
                     material_analizado=material,
+                    cultivo=cultivo,
+                    numero_boletin=numero_boletin,
                     laboratorio=laboratorio,
                     sustancias_activas_detectadas=resultado
                 )
-                return f"Análisis registrado ID: {obj.id} ({material})."
+                return f"Análisis registrado ID: {obj.id} (Bol: {numero_boletin})."
             except Exception as e:
                 return f"Error al registrar análisis: {str(e)}"
 
@@ -399,6 +613,7 @@ class Command(BaseCommand):
         # 3. HERRAMIENTAS DE GESTIÓN DOCUMENTAL (DAT y Ventas)
         # ==============================================================================
 
+        @mcp.tool()
         async def generar_dat(
             nombre_destinatario: str, 
             productos: list[str], 
@@ -426,75 +641,108 @@ class Command(BaseCommand):
         ) -> str:
             """
             Genera los datos completos para el Documento de Acompañamiento al Transporte (DAT).
-            Busca datos en los modelos (Transportista, Persona) si se proporcionan NIFs.
+            Prioriza datos de la BD, pero acepta argumentos manuales si no existen registros.
             """
             try:
-                # 0. Validaciones básicas
+                # 0. Validaciones
                 if not (len(productos) == len(cantidades) == len(unidades)):
                     return "Error: Las listas de productos, cantidades y unidades deben tener la misma longitud."
                 
                 variedades_safe = variedades + [""] * (len(productos) - len(variedades))
+                
+                # Helper para formatear dirección
+                def fmt_parts(d):
+                    if not d: return {"via": "", "nombre": "", "num": "", "cp": "", "loc": "", "prov": "", "entidad": "", "pais": ""}
+                    return {
+                        "via": d.tipo_via or "", "nombre": d.nombre_via or "", "num": d.numero or "", 
+                        "cp": d.codigo_postal or "", "loc": d.localidad or "", "prov": d.provincia or "",
+                        "entidad": d.entidad_poblacion or d.localidad or "",
+                        "pais": d.pais or "España"
+                    }
 
-                # 1. Recuperar Destinatario y Explotación (Base)
-                destinatario = await sync_to_async(Destinatario.objects.filter(
-                    nombre__icontains=nombre_destinatario
-                ).select_related('transporte_asignado', 'direccion').first)()
-
-                if not destinatario:
-                    return f"Error: Destinatario '{nombre_destinatario}' no encontrado. Créalo con /nuevo_cliente."
-
+                # 1. Recuperar Explotación (Origen) - ESTO ES OBLIGATORIO
                 explotacion = await sync_to_async(Explotacion.objects.select_related('titular', 'direccion').first)()
                 if not explotacion:
                     return "Error: No hay Explotación configurada como origen."
 
-                # 2. LÓGICA INTELIGENTE: TRANSPORTISTA
-                # Prioridad: 1. Búsqueda en DB por NIF -> 2. Argumentos manuales
+                # 2. Recuperar Destinatario (Búsqueda o Argumento)
+                destinatario = await sync_to_async(Destinatario.objects.filter(
+                    nombre__icontains=nombre_destinatario
+                ).select_related('transporte_asignado', 'direccion').first)()
+
+                # Valores por defecto (de argumentos)
+                dest_nombre = nombre_destinatario
+                dest_nif = "(Rellenar)"
+                dest_dir = fmt_parts(None) # Vacío
+                dest_tel = ""
+                dest_movil = ""
+                dest_email = ""
+                vehiculo = None
+                
+                # Si encontramos en BD, sobrescribimos con datos reales
+                if destinatario:
+                    dest_nombre = destinatario.nombre
+                    dest_nif = destinatario.documento
+                    dest_dir = fmt_parts(destinatario.direccion)
+                    vehiculo = destinatario.transporte_asignado
+                    
+                    # Datos extra del destinatario vía Persona
+                    persona_dest = await sync_to_async(Persona.objects.filter(nif=destinatario.documento).first)()
+                    if persona_dest:
+                        dest_tel = persona_dest.telefono or ""
+                        dest_movil = persona_dest.movil or ""
+                        dest_email = persona_dest.email or ""
+
+                # 3. Datos Transportista (Búsqueda o Argumento)
                 t_nombre = nombre_transportista or "(Rellenar)"
                 t_nif = nif_transportista or "VACÍO"
                 t_tel = telefono_transportista or "VACÍO"
                 t_email = email_transportista or "VACÍO"
 
                 if nif_transportista:
-                    # A. Buscar en modelo Transportista
                     transp_db = await sync_to_async(Transportista.objects.filter(nif=nif_transportista).first)()
                     if transp_db:
                         t_nombre = transp_db.nombre
                         t_tel = transp_db.telefono or t_tel
                         t_email = transp_db.email or t_email
                     else:
-                        # B. Buscar en modelo Persona (para conductores propios/autónomos)
                         persona_transp = await sync_to_async(Persona.objects.filter(nif=nif_transportista).first)()
                         if persona_transp:
                             t_nombre = persona_transp.nombre
                             t_tel = persona_transp.telefono or persona_transp.movil or t_tel
                             t_email = persona_transp.email or t_email
 
-                # 3. LÓGICA INTELIGENTE: AUTORIZADO
+                # 4. Datos Autorizado (Lógica inteligente)
                 auth_nom = nombre_autorizado or "VACÍO"
                 auth_nif = nif_autorizado or "VACÍO"
-
-                if nif_autorizado:
-                    # Buscar persona por NIF si se proporciona
-                    persona_auth = await sync_to_async(Persona.objects.filter(nif=nif_autorizado).first)()
-                    if persona_auth:
-                        auth_nom = persona_auth.nombre
                 
-                # Si sigue vacío, intentar inferir del titular/representante
+                if nif_autorizado:
+                    persona_auth = await sync_to_async(Persona.objects.filter(nif=nif_autorizado).first)()
+                    if persona_auth: auth_nom = persona_auth.nombre
+                
                 titular = explotacion.titular
                 if auth_nom == "VACÍO" and explotacion.tipo_representacion == 'REPRESENTANTE' and titular:
                     auth_nom = titular.nombre
                     auth_nif = titular.nif
 
-                # 4. Buscar Parcela de Origen (Referencia SIGPAC)
+                # 5. Parcela Origen (SIGPAC)
                 parcela_origen = await sync_to_async(Parcela.objects.filter(
-                    explotacion=explotacion,
-                    especie__icontains=productos[0]
+                    explotacion=explotacion, especie__icontains=productos[0]
                 ).first)()
 
-                # 5. Generar Registros en BD
-                vehiculo = destinatario.transporte_asignado
+                sigpac_data = {"prov": "", "mun": "", "pol": "", "par": "", "rec": ""}
+                if parcela_origen:
+                    sigpac_data = {
+                        "prov": explotacion.direccion.provincia if explotacion.direccion else "",
+                        "mun": explotacion.direccion.localidad if explotacion.direccion else "",
+                        "pol": parcela_origen.poligono or "",
+                        "par": parcela_origen.parcela or "",
+                        "rec": parcela_origen.recinto or ""
+                    }
+
+                # 6. Generar Registros en BD (Solo si hay datos mínimos)
                 numero_dat = f"DAT-{datetime.now().strftime('%Y%m%d-%H%M')}"
-                obs = f"Destino: {destinatario.nombre}. Eco: {es_ecologico}. Total líneas: {len(productos)}"
+                obs = f"Destino: {dest_nombre}. Eco: {es_ecologico}. Líneas: {len(productos)}"
                 
                 nuevo_dat = await sync_to_async(DocumentoDAT.objects.create)(
                     numero=numero_dat,
@@ -506,98 +754,63 @@ class Command(BaseCommand):
                     observaciones=obs
                 )
 
-                persona_dest = await sync_to_async(Persona.objects.filter(nif=destinatario.documento).first)()
-                
-                await sync_to_async(RegistroTransporte.objects.create)(
-                    documento_dat=nuevo_dat,
-                    fecha_transporte=datetime.now(),
-                    destinatario=persona_dest, 
-                    vehiculo=vehiculo,
-                    cantidad=cantidades[0],
-                    unidad=unidades[0],
-                    estado="emitido"
-                )
+                # Solo creamos registro de transporte si tenemos destinatario o vehículo válido
+                if destinatario or vehiculo:
+                    p_dest_id = None
+                    if destinatario:
+                         p = await sync_to_async(Persona.objects.filter(nif=destinatario.documento).first)()
+                         if p: p_dest_id = p.id
 
-                # 6. Construir Reporte Detallado
-                def fmt_parts(d):
-                    if not d: return {"via": "", "nombre": "", "num": "", "cp": "", "loc": "", "prov": "", "entidad": "", "pais": ""}
-                    return {
-                        "via": d.tipo_via or "", "nombre": d.nombre_via or "", "num": d.numero or "", 
-                        "cp": d.codigo_postal or "", "loc": d.localidad or "", "prov": d.provincia or "",
-                        "entidad": d.entidad_poblacion or d.localidad or "",
-                        "pais": d.pais or "España"
-                    }
+                    await sync_to_async(RegistroTransporte.objects.create)(
+                        documento_dat=nuevo_dat,
+                        fecha_transporte=datetime.now(),
+                        destinatario_id=p_dest_id, 
+                        vehiculo=vehiculo,
+                        cantidad=cantidades[0],
+                        unidad=unidades[0],
+                        estado="emitido"
+                    )
 
+                # 7. Reporte Final
                 org = fmt_parts(explotacion.direccion)
-                dst = fmt_parts(destinatario.direccion)
                 
-                # Datos Titular
-                t_nombre = titular.nombre if titular else explotacion.nombre
-                t_nif = explotacion.nif
-                t_tel = titular.telefono if titular else "VACÍO"
-                t_email = titular.email if titular else "VACÍO"
+                t_nombre_tit = titular.nombre if titular else explotacion.nombre
+                t_nif_tit = explotacion.nif
+                t_tel_tit = titular.telefono if titular else "VACÍO"
+                t_email_tit = titular.email if titular else "VACÍO"
+                t_movil_tit = titular.movil if titular else ""
                 
-                # Sexo y Móvil Titular
-                t_movil = titular.movil if titular else ""
                 check_sexo_h = "[ ]"
                 check_sexo_m = "[ ]"
                 if titular and titular.sexo:
                     if titular.sexo == 'H': check_sexo_h = "[X]"
                     if titular.sexo == 'M': check_sexo_m = "[X]"
 
-                # Datos Destinatario (Extra)
-                dest_tel = persona_dest.telefono if persona_dest else ""
-                dest_movil = persona_dest.movil if persona_dest else ""
-                dest_email = persona_dest.email if persona_dest else ""
-
-                # Sigpac
-                sigpac_data = {"prov": "", "mun": "", "pol": "", "par": "", "rec": ""}
-                if parcela_origen:
-                    sigpac_data = {
-                        "prov": explotacion.direccion.provincia if explotacion.direccion else "",
-                        "mun": explotacion.direccion.localidad if explotacion.direccion else "",
-                        "pol": parcela_origen.poligono or "",
-                        "par": parcela_origen.parcela or "",
-                        "rec": parcela_origen.recinto or ""
-                    }
-
-                # Transporte
                 v_mat = vehiculo.matricula if vehiculo else "PENDIENTE DE ASIGNAR"
-                
-                # Fechas
                 fecha_salida = datetime.now().strftime("%d/%m/%Y")
                 hora_salida = datetime.now().strftime("%H:%M")
                 
-                # Calidad visual
                 check_dop = f"[X] {denominacion_origen}" if denominacion_origen else "[ ] Denominación de Origen Protegida"
                 check_igp = f"[X] {indicacion_geografica}" if indicacion_geografica else "[ ] Indicación Geográfica Protegida"
                 check_etg = f"[X] {especialidad_tradicional}" if especialidad_tradicional else "[ ] Especialidad Tradicional Garantizada"
                 check_eco = "[X] Producción ecológica" if es_ecologico else "[ ] Producción ecológica"
                 check_int = "[X] Producción integrada de Andalucía" if es_integrada else "[ ] Producción integrada de Andalucía"
-                
-                es_calidad_diferenciada = "SÍ" if (denominacion_origen or indicacion_geografica or especialidad_tradicional) else "NO"
+                es_calidad_dif = "SÍ" if (denominacion_origen or indicacion_geografica or especialidad_tradicional) else "NO"
 
-                # Tabla de productos
                 lineas_carga = ""
                 for i, (prod, cant, unid, var) in enumerate(zip(productos, cantidades, unidades, variedades_safe), 1):
-                    var_str = var if var else ""
-                    lineas_carga += f"""
-* LÍNEA {i}:
-- Denominación: {prod}
-- Variedad/Tipo: {var_str}
-- Unidad: {unid}
-- Cantidad: {cant}"""
+                    lineas_carga += f"\n* LÍNEA {i}:\n - Denominación: {prod}\n - Variedad: {var or 'VACÍO'}\n - Unidad: {unid}\n - Cantidad: {cant}"
 
                 reporte = f"""DAT GENERADO: {numero_dat}
 --------------------------------------------------------------------------------
 1. ORIGEN DEL PORTE
 1.1 TITULAR:
-- Nombre/Razón Social: {t_nombre}
-- DNI/NIE/NIF: {t_nif} | Sexo: {check_sexo_h}H {check_sexo_m}M
+- Nombre/Razón Social: {t_nombre_tit}
+- DNI/NIE/NIF: {t_nif_tit} | Sexo: {check_sexo_h}H {check_sexo_m}M
 - Domicilio: {org['via']} {org['nombre']} Nº {org['num']}
 - Entidad Población: {org['entidad']} | Municipio: {org['loc']}
 - Provincia: {org['prov']} | CP: {org['cp']} | País: {org['pais']}
-- Teléfono: {t_tel} | Móvil: {t_movil} | Email: {t_email}
+- Teléfono: {t_tel_tit} | Móvil: {t_movil_tit} | Email: {t_email_tit}
 - Autorizado: {auth_nom} | DNI Autorizado: {auth_nif}
 
 1.2 UNIDAD DE PRODUCCIÓN (SIGPAC):
@@ -607,11 +820,11 @@ class Command(BaseCommand):
 
 --------------------------------------------------------------------------------
 2. DESTINATARIO
-- Nombre/Razón Social: {destinatario.nombre}
-- DNI/NIE/NIF: {destinatario.documento}
-- Domicilio: {dst['via']} {dst['nombre']} Nº {dst['num']}
-- Entidad Población: {dst['entidad']} | Municipio: {dst['loc']}
-- Provincia: {dst['prov']} | CP: {dst['cp']} | País: {dst['pais']}
+- Nombre/Razón Social: {dest_nombre}
+- DNI/NIE/NIF: {dest_nif}
+- Domicilio: {dest_dir['via']} {dest_dir['nombre']} Nº {dest_dir['num']}
+- Entidad Población: {dest_dir['entidad']} | Municipio: {dest_dir['loc']}
+- Provincia: {dest_dir['prov']} | CP: {dest_dir['cp']} | País: {dest_dir['pais']}
 - Teléfono: {dest_tel} | Móvil: {dest_movil} | Email: {dest_email}
 
 --------------------------------------------------------------------------------
@@ -630,7 +843,7 @@ class Command(BaseCommand):
 
 --------------------------------------------------------------------------------
 5. CALIDAD COMERCIAL
-- ¿Calidad Diferenciada? {es_calidad_diferenciada}
+- ¿Calidad Diferenciada? {es_calidad_dif}
 - {check_dop}
 - {check_igp}
 - {check_etg}
@@ -659,10 +872,13 @@ class Command(BaseCommand):
             producto: str,
             cantidad: float,
             cliente: str,
-            albaran: str
+            albaran: str,
+            numero_lote: str = "",
+            cliente_nif: str = "",
+            numero_rgseaa: str = ""
         ) -> str:
             """
-            Registra una venta o salida de cosecha.
+            Registra una venta o salida de cosecha completa.
             Comando asociado: /venta
             """
             try:
@@ -673,7 +889,10 @@ class Command(BaseCommand):
                     producto=producto,
                     cantidad_kg=cantidad,
                     cliente_nombre=cliente,
-                    numero_albaran=albaran
+                    numero_albaran=albaran,
+                    numero_lote=numero_lote,
+                    cliente_nif=cliente_nif,
+                    numero_rgseaa=numero_rgseaa
                 )
                 return f"Venta registrada: {cantidad}kg de {producto} a {cliente} (Alb: {albaran})."
             except Exception as e:
@@ -687,246 +906,294 @@ class Command(BaseCommand):
         async def generar_cuaderno(anio: int) -> str:
             """
             Genera los datos COMPLETOS para el Cuaderno de Explotación (Todas las secciones).
+            Extrae toda la información disponible en la base de datos para el año solicitado.
             Comando asociado: /cuaderno
             """
             try:
                 start_date = date(anio, 1, 1)
                 end_date = date(anio, 12, 31)
                 
-                # Fetch Explotacion with related fields
+                # 1. Recuperar Explotación y datos maestros
                 explotacion = await sync_to_async(Explotacion.objects.select_related('titular', 'direccion').first)()
                 if not explotacion:
-                    return "Error: No hay explotación configurada."
+                    return "Error: No hay explotación configurada en el sistema."
                 
-                # Helper for address
+                titular = explotacion.titular
+                dir_exp = explotacion.direccion
+
+                # Helper para formatear direcciones
                 def fmt_dir(d):
                     if not d: return "VACÍO"
-                    return f"{d.tipo_via} {d.nombre_via} {d.numero}, {d.codigo_postal} {d.localidad} ({d.provincia})"
+                    return f"{d.tipo_via or ''} {d.nombre_via or ''} Nº{d.numero or ''}, {d.codigo_postal or ''} {d.localidad or ''} ({d.provincia or ''})"
 
                 # --- SECCIÓN 1: INFORMACIÓN GENERAL ---
-                titular = explotacion.titular
-                t_dir = explotacion.direccion
                 
-                # Titular info
+                # 1.1 Datos Generales
                 t_nombre = f"{titular.nombre} {titular.apellidos or ''}" if titular else explotacion.nombre
-                t_nif = explotacion.nif
-                t_reg_nac = explotacion.numero_registro_nacional
-                t_reg_aut = explotacion.numero_registro_autonomico
-                t_tel = titular.telefono if titular else ""
-                t_movil = titular.movil if titular else ""
-                t_email = titular.email if titular else ""
+                t_nif = explotacion.nif or "VACÍO"
+                t_rega = explotacion.numero_registro_nacional or "VACÍO"
+                t_rea = explotacion.numero_registro_autonomico or "VACÍO"
+                t_dir = fmt_dir(dir_exp)
+                t_tel = titular.telefono if titular else "VACÍO"
+                t_movil = titular.movil if titular else "VACÍO"
+                t_email = titular.email if titular else "VACÍO"
                 
-                # Representante info
-                rep_nombre = t_nombre if explotacion.tipo_representacion == 'REPRESENTANTE' else "VACÍO"
-                rep_nif = t_nif if explotacion.tipo_representacion == 'REPRESENTANTE' else "VACÍO"
-                rep_tipo = explotacion.tipo_representacion
+                # Representante (Lógica: Si el tipo es REPRESENTANTE, asumimos que los datos del titular vinculado son del rep.)
+                rep_nombre = "VACÍO"
+                rep_nif = "VACÍO"
+                rep_tipo = "VACÍO"
+                if explotacion.tipo_representacion == 'REPRESENTANTE':
+                    rep_nombre = t_nombre 
+                    rep_nif = t_nif
+                    rep_tipo = "Representante Legal"
 
-                info_general = f"""**SECCIÓN 1: INFORMACIÓN GENERAL**
-                1.1 DATOS DE LA EXPLOTACIÓN
-                - Titular Nombre/Razón Social: {t_nombre}
-                - NIF: {t_nif}
-                - Nº Reg. Nacional: {t_reg_nac}
-                - Nº Reg. Autonómico: {t_reg_aut}
-                - Dirección: {t_dir.nombre_via if t_dir else ''}, {t_dir.numero if t_dir else ''}
-                - Localidad: {t_dir.localidad if t_dir else ''}
-                - C. Postal: {t_dir.codigo_postal if t_dir else ''}
-                - Provincia: {t_dir.provincia if t_dir else ''}
-                - Teléfono Fijo: {t_tel}
-                - Móvil: {t_movil}
-                - Email: {t_email}
+                r = f"""DATOS PARA CUADERNO DE EXPLOTACIÓN (CAMPAÑA {anio})
+================================================================================
+1. INFORMACIÓN GENERAL
+--------------------------------------------------------------------------------
+1.1 DATOS DE LA EXPLOTACIÓN
+- Titular (Nombre/Razón Social): {t_nombre}
+- NIF: {t_nif}
+- Nº Registro Nacional (REGA): {t_rega}
+- Nº Registro Autonómico (REA): {t_rea}
+- Dirección Completa: {t_dir}
+- Teléfono Fijo: {t_tel} | Móvil: {t_movil}
+- Email: {t_email}
 
-                REPRESENTANTE (Si aplica):
-                - Nombre: {rep_nombre}
-                - NIF: {rep_nif}
-                - Tipo Representación: {rep_tipo}
-                """
+REPRESENTANTE (Si procede):
+- Nombre y Apellidos: {rep_nombre}
+- NIF: {rep_nif}
+- Tipo de Representación: {rep_tipo}
+- Firma y Fecha: (Pendiente manuscrita)
+"""
 
-                # 1.2 APLICADORES
-                personal_qs = Personal.objects.filter(habilitado_fitosanitarios=True)
-                aplicadores = await sync_to_async(list)(personal_qs)
-                
-                info_general += "\n**SECCIÓN 1.2: PERSONAS O EMPRESAS (APLICADORES)**\n"
+                # 1.2 Personas/Empresas (Aplicadores)
+                # Filtramos personal habilitado
+                aplicadores = await sync_to_async(list)(Personal.objects.filter(habilitado_fitosanitarios=True))
+                r += "\n1.2 PERSONAS O EMPRESAS QUE INTERVIENEN (APLICADORES)\n"
                 if not aplicadores:
-                    info_general += "VACÍO (Sin aplicadores registrados)\n"
+                    r += "* (VACÍO - Registrar aplicadores en 'Personal' con /nuevo_personal)\n"
                 else:
                     for i, p in enumerate(aplicadores, 1):
-                        info_general += f"FILA {i}:\n"
-                        info_general += f"  - Nombre: {p.nombre} {p.apellidos}\n"
-                        info_general += f"  - NIF: {p.documento}\n"
-                        info_general += f"  - Nº ROPO: (Consultar Carné)\n" 
-                        info_general += f"  - Tipo Carné (Cargo): {p.cargo}\n"
+                        # Inferir checkboxes del carné desde el cargo
+                        carnet = (p.cargo or "").upper()
+                        check_basico = "[X]" if "BASICO" in carnet else "[ ]"
+                        check_cualif = "[X]" if "CUALIFICADO" in carnet else "[ ]"
+                        check_fumig = "[X]" if "FUMIGADOR" in carnet else "[ ]"
+                        check_piloto = "[X]" if "PILOTO" in carnet else "[ ]"
+                        
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Nombre/Empresa: {p.nombre} {p.apellidos}\n"
+                        r += f"  - NIF: {p.documento}\n"
+                        r += f"  - Nº Inscripción ROPO: {p.documento}\n" # Placeholder si no hay campo ROPO específico
+                        r += f"  - Carné: {check_basico}Básico {check_cualif}Cualif. {check_fumig}Fumigador {check_piloto}Piloto\n"
+                        r += f"  - ¿Es Asesor?: [ ] (Marcar si procede)\n"
 
-                # 1.3 MAQUINARIA
+                # 1.3 Equipos (Maquinaria)
                 equipos = await sync_to_async(list)(EquipoAplicacion.objects.filter(explotacion=explotacion))
-                
-                info_general += "\n**SECCIÓN 1.3: EQUIPOS DE APLICACIÓN**\n"
+                r += "\n1.3 EQUIPOS DE APLICACIÓN (MAQUINARIA)\n"
                 if not equipos:
-                    info_general += "VACÍO (Sin maquinaria)\n"
+                    r += "* (VACÍO - Registrar en 'EquipoAplicacion' con /nueva_maquina)\n"
                 else:
                     for i, eq in enumerate(equipos, 1):
-                        info_general += f"FILA {i}:\n"
-                        info_general += f"  - Descripción: {eq.descripcion}\n"
-                        info_general += f"  - Nº ROMA: {eq.numero_inscripcion_roma}\n"
-                        info_general += f"  - Fecha Adquisición: {eq.fecha_adquisicion}\n"
-                        info_general += f"  - Última Inspección: {eq.fecha_ultima_inspeccion}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Descripción: {eq.descripcion}\n"
+                        r += f"  - Nº Inscripción ROMA: {eq.numero_inscripcion_roma}\n"
+                        r += f"  - Fecha Adquisición: {eq.fecha_adquisicion or 'VACÍO'}\n"
+                        r += f"  - Fecha Última Inspección (ITEAF): {eq.fecha_ultima_inspeccion or 'VACÍO'}\n"
 
-                # 1.4 ASESORAMIENTO
+                # 1.4 Asesoramiento
                 asesores = await sync_to_async(list)(Asesor.objects.select_related('persona').all())
-                
-                info_general += "\n**SECCIÓN 1.4: ASESORAMIENTO (GIP)**\n"
+                r += "\n1.4 ASESORAMIENTO (GIP)\n"
                 if not asesores:
-                    info_general += "VACÍO (Sin asesores)\n"
+                    r += "* (VACÍO - Registrar en 'Asesor' con /nuevo_asesor)\n"
                 else:
                     for i, a in enumerate(asesores, 1):
-                        info_general += f"FILA {i}:\n"
-                        info_general += f"  - Nombre/Entidad: {a.persona.nombre}\n"
-                        info_general += f"  - NIF: {a.persona.nif}\n"
-                        info_general += f"  - Nº ROPO/Identificación: {a.numero_inscripcion_ropo}\n"
-                        info_general += f"  - Tipo Explotación GIP: {a.tipo_carnet}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Nombre/Entidad: {a.persona.nombre}\n"
+                        r += f"  - NIF: {a.persona.nif}\n"
+                        r += f"  - Nº Identificación/ROPO: {a.numero_inscripcion_ropo}\n"
+                        r += f"  - Tipo Explotación GIP: {a.tipo_carnet or 'VACÍO'} (Ej: AE, PI, Atrias)\n"
 
-                # --- SECCIÓN 2: PARCELAS ---
+                # ==============================================================================
+                # SECCIÓN 2: IDENTIFICACIÓN DE PARCELAS
+                # ==============================================================================
                 parcelas = await sync_to_async(list)(Parcela.objects.filter(explotacion=explotacion))
+                r += "\n--------------------------------------------------------------------------------\n"
+                r += "2. IDENTIFICACIÓN DE PARCELAS\n"
+                r += "--------------------------------------------------------------------------------\n"
                 
-                info_parcelas = "\n**SECCIÓN 2: IDENTIFICACIÓN DE PARCELAS**\n"
+                # 2.1 Datos Identificativos y Agronómicos
+                r += "2.1 DATOS IDENTIFICATIVOS Y AGRONÓMICOS\n"
                 if not parcelas:
-                    info_parcelas += "VACÍO (Sin parcelas)\n"
+                    r += "* (VACÍO - Registrar en 'Parcela' con /nueva_parcela)\n"
                 else:
                     for i, p in enumerate(parcelas, 1):
-                        info_parcelas += f"FILA {i}:\n"
-                        info_parcelas += f"  - Nº Orden: {i}\n"
-                        info_parcelas += f"  - Ref SIGPAC: {p.referencia_sigpac}\n"
-                        info_parcelas += f"  - Polígono: {p.poligono} | Parcela: {p.parcela} | Recinto: {p.recinto}\n"
-                        info_parcelas += f"  - Uso SIGPAC: {p.uso_sigpac}\n"
-                        info_parcelas += f"  - Sup. SIGPAC: {p.superficie_sigpac}\n"
-                        info_parcelas += f"  - Sup. Cultivada: {p.superficie_cultivada}\n"
-                        info_parcelas += f"  - Especie: {p.especie}\n"
-                        info_parcelas += f"  - Variedad: {p.variedad}\n"
-                        info_parcelas += f"  - Regadío/Secano: {p.secano_regadio}\n"
-                        info_parcelas += f"  - Aire Libre/Protegido: {p.aire_protegido}\n"
+                        r += f"  FILA {i} (Nº Orden: {i}):\n"
+                        r += f"  - Provincia/Municipio/Agregado/Zona: (Ver Ref SIGPAC: {p.referencia_sigpac})\n"
+                        r += f"  - Polígono: {p.poligono or ''} | Parcela: {p.parcela or ''} | Recinto: {p.recinto or ''}\n"
+                        r += f"  - Uso SIGPAC: {p.uso_sigpac or 'VACÍO'}\n"
+                        r += f"  - Superficie SIGPAC: {p.superficie_sigpac or 0} ha\n"
+                        r += f"  - Superficie Cultivada: {p.superficie_cultivada or 0} ha\n"
+                        r += f"  - Especie: {p.especie or 'VACÍO'}\n"
+                        r += f"  - Variedad: {p.variedad or 'VACÍO'}\n"
+                        r += f"  - Secano/Regadío: {p.secano_regadio or 'VACÍO'}\n"
+                        r += f"  - Aire Libre/Protegido: {p.aire_protegido or 'VACÍO'}\n"
+                        r += f"  - Sistema Asesoramiento GIP: (Rellenar manual: AE, PI, etc.)\n"
 
-                # --- SECCIÓN 3: TRATAMIENTOS ---
+                # 2.2 Datos Medioambientales (Placeholder, modelo actual no tiene estos campos específicos)
+                r += "\n2.2 DATOS MEDIOAMBIENTALES\n"
+                if not parcelas:
+                    r += "* (VACÍO)\n"
+                else:
+                    for i, p in enumerate(parcelas, 1):
+                        r += f"  FILA {i} (Parcela Orden {i}):\n"
+                        r += f"  - ¿Puntos de agua en parcela?: [ ]SI [ ]NO\n"
+                        r += f"  - Distancia a agua (m): \n"
+                        r += f"  - Zonas Específicas (Protegidas): [ ]Totalmente [ ]Parcialmente [ ]NO\n"
+
+                # ==============================================================================
+                # SECCIÓN 3: TRATAMIENTOS FITOSANITARIOS
+                # ==============================================================================
+                r += "\n--------------------------------------------------------------------------------\n"
+                r += "3. TRATAMIENTOS FITOSANITARIOS\n"
+                r += "--------------------------------------------------------------------------------\n"
+
+                # 3.1 Registro de Actuaciones
                 tratamientos = await sync_to_async(list)(DiarioActividad.objects.filter(
                     explotacion=explotacion,
                     fecha__range=(start_date, end_date),
                     tipo="TRATAMIENTO"
                 ).select_related('parcela', 'aplicador', 'equipo'))
                 
-                info_tratamientos = "\n**SECCIÓN 3.1: REGISTRO DE ACTUACIONES FITOSANITARIAS**\n"
+                r += "3.1 REGISTRO DE ACTUACIONES FITOSANITARIAS\n"
                 if not tratamientos:
-                    info_tratamientos += "VACÍO (Sin tratamientos)\n"
+                    r += "* (VACÍO - Sin tratamientos registrados en este periodo)\n"
                 else:
                     for i, t in enumerate(tratamientos, 1):
                         parc_ref = t.parcela.referencia_sigpac if t.parcela else "TODAS"
-                        cultivo = f"{t.parcela.especie} {t.parcela.variedad}" if t.parcela else "Varios"
-                        aplicador_nom = f"{t.aplicador.nombre} (NIF: {t.aplicador.nif})" if t.aplicador else "VACÍO"
-                        equipo_nom = t.equipo.descripcion if t.equipo else "Manual/Sin equipo"
+                        cultivo_txt = f"{t.parcela.especie} {t.parcela.variedad}" if t.parcela else "Varios"
+                        aplicador_txt = f"{t.aplicador.nombre} (NIF: {t.aplicador.nif})" if t.aplicador else "VACÍO"
+                        equipo_txt = t.equipo.descripcion if t.equipo else "Manual/Sin equipo"
                         
-                        info_tratamientos += f"FILA {i}:\n"
-                        info_tratamientos += f"  - Fecha: {t.fecha}\n"
-                        info_tratamientos += f"  - Parcela ID: {parc_ref}\n"
-                        info_tratamientos += f"  - Cultivo: {cultivo}\n"
-                        info_tratamientos += f"  - Superficie Tratada: {t.superficie_tratada_ha}\n"
-                        info_tratamientos += f"  - Problema Fitosanitario: {t.problema_fitosanitario}\n"
-                        info_tratamientos += f"  - Aplicador: {aplicador_nom}\n"
-                        info_tratamientos += f"  - Equipo: {equipo_nom}\n"
-                        info_tratamientos += f"  - Producto: {t.producto_nombre}\n"
-                        info_tratamientos += f"  - Nº Registro: {t.producto_numero_registro}\n"
-                        info_tratamientos += f"  - Dosis: {t.dosis} {t.dosis_text or ''}\n"
-                        info_tratamientos += f"  - Eficacia: {t.eficacia}\n"
-                        info_tratamientos += f"  - Observaciones: {t.observaciones}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Id. Parcelas: {parc_ref}\n"
+                        r += f"  - Cultivo/Especie/Variedad: {cultivo_txt}\n"
+                        r += f"  - Fechas: {t.fecha}\n"
+                        r += f"  - Sup. Tratada: {t.superficie_tratada_ha} ha\n"
+                        r += f"  - Problema Fitosanitario: {t.problema_fitosanitario}\n"
+                        r += f"  - Aplicador: {aplicador_txt}\n"
+                        r += f"  - Equipo: {equipo_txt}\n"
+                        r += f"  - Producto (Nombre): {t.producto_nombre}\n"
+                        r += f"  - Producto (Nº Registro): {t.producto_numero_registro or 'VACÍO'}\n"
+                        r += f"  - Dosis: {t.dosis} {t.dosis_text or ''}\n"
+                        r += f"  - Eficacia: {t.eficacia or 'Buena'}\n"
+                        r += f"  - Observaciones: {t.observaciones}\n"
 
-                # 3.2 SEMILLA TRATADA
+                # 3.2 Semilla Tratada
                 siembras = await sync_to_async(list)(SemillaTratada.objects.filter(
-                    explotacion=explotacion,
-                    fecha_siembra__range=(start_date, end_date)
+                    explotacion=explotacion, fecha_siembra__range=(start_date, end_date)
                 ).select_related('parcela'))
                 
-                info_semillas = "\n**SECCIÓN 3.2: SEMILLA TRATADA**\n"
-                if not siembras:
-                    info_semillas += "VACÍO (Sin siembra de semilla tratada)\n"
-                else:
+                r += "\n3.2 USO DE SEMILLA TRATADA\n"
+                r += f"  ¿Aplica Tratamiento? [{'X' if siembras else ' '}] SI  [{' ' if siembras else 'X'}] NO\n"
+                if siembras:
                     for i, s in enumerate(siembras, 1):
                         parc_ref = s.parcela.referencia_sigpac if s.parcela else "N/A"
-                        info_semillas += f"FILA {i}:\n"
-                        info_semillas += f"  - Fecha Siembra: {s.fecha_siembra}\n"
-                        info_semillas += f"  - Parcela: {parc_ref}\n"
-                        info_semillas += f"  - Cultivo/Variedad: {s.cultivo}\n"
-                        info_semillas += f"  - Sup. Sembrada: {s.superficie_sembrada_ha}\n"
-                        info_semillas += f"  - Cantidad Semilla: {s.cantidad_semilla_kg} kg\n"
-                        info_semillas += f"  - Producto: {s.producto_fitosanitario}\n"
-                        info_semillas += f"  - Nº Registro: {s.numero_registro}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Fecha Siembra: {s.fecha_siembra}\n"
+                        r += f"  - Id. Parcela: {parc_ref}\n"
+                        r += f"  - Cultivo/Variedad: {s.cultivo}\n"
+                        r += f"  - Sup. Sembrada: {s.superficie_sembrada_ha} ha\n"
+                        r += f"  - Cantidad Semilla: {s.cantidad_semilla_kg} kg\n"
+                        r += f"  - Producto (Nombre): {s.producto_fitosanitario}\n"
+                        r += f"  - Producto (Nº Registro): {s.numero_registro}\n"
 
-                # --- SECCIÓN 4: ANÁLISIS ---
+                # 3.3, 3.4, 3.5 (Postcosecha, Locales, Transporte) - Modelos no específicos
+                r += "\n3.3 TRATAMIENTOS POSTCOSECHA\n"
+                r += "  ¿Aplica Tratamiento? [ ] SI  [X] NO (Consultar registros manuales si existen)\n"
+                r += "\n3.4 TRATAMIENTOS LOCALES ALMACENAMIENTO\n"
+                r += "  ¿Aplica Tratamiento? [ ] SI  [X] NO\n"
+                r += "\n3.5 TRATAMIENTOS MEDIOS DE TRANSPORTE\n"
+                r += "  ¿Aplica Tratamiento? [ ] SI  [X] NO\n"
+
+                # ==============================================================================
+                # SECCIÓN 4: ANÁLISIS
+                # ==============================================================================
+                r += "\n--------------------------------------------------------------------------------\n"
+                r += "4. REGISTRO DE ANÁLISIS (RESIDUOS)\n"
+                r += "--------------------------------------------------------------------------------\n"
                 analisis = await sync_to_async(list)(AnalisisLaboratorio.objects.filter(
-                    explotacion=explotacion,
-                    fecha__range=(start_date, end_date)
+                    explotacion=explotacion, fecha__range=(start_date, end_date)
                 ))
-                
-                info_analisis = "\n**SECCIÓN 4: ANÁLISIS**\n"
                 if not analisis:
-                    info_analisis += "VACÍO (Sin análisis)\n"
+                    r += "* (VACÍO - Registrar con /analisis)\n"
                 else:
                     for i, an in enumerate(analisis, 1):
-                        info_analisis += f"FILA {i}:\n"
-                        info_analisis += f"  - Fecha: {an.fecha}\n"
-                        info_analisis += f"  - Material Analizado: {an.material_analizado}\n"
-                        info_analisis += f"  - Cultivo/Cosecha: {an.cultivo}\n"
-                        info_analisis += f"  - Nº Boletín: {an.numero_boletin}\n"
-                        info_analisis += f"  - Laboratorio: {an.laboratorio}\n"
-                        info_analisis += f"  - Resultados: {an.sustancias_activas_detectadas}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Fecha: {an.fecha}\n"
+                        r += f"  - Material Analizado: {an.material_analizado} (Veg/Tierra/Agua)\n"
+                        r += f"  - Cultivo/Cosecha Muestreado: {an.cultivo}\n"
+                        r += f"  - Nº Boletín Análisis: {an.numero_boletin}\n"
+                        r += f"  - Laboratorio: {an.laboratorio}\n"
+                        r += f"  - Sustancias Detectadas: {an.sustancias_activas_detectadas}\n"
 
-                # --- SECCIÓN 5: COSECHA ---
+                # ==============================================================================
+                # SECCIÓN 5: COSECHA COMERCIALIZADA
+                # ==============================================================================
+                r += "\n--------------------------------------------------------------------------------\n"
+                r += "5. REGISTRO DE COSECHA COMERCIALIZADA\n"
+                r += "--------------------------------------------------------------------------------\n"
                 ventas = await sync_to_async(list)(RegistroMovimientoProducto.objects.filter(
-                    explotacion=explotacion,
-                    fecha__range=(start_date, end_date)
+                    explotacion=explotacion, fecha__range=(start_date, end_date)
                 ))
-                
-                info_ventas = "\n**SECCIÓN 5: COSECHA COMERCIALIZADA**\n"
                 if not ventas:
-                    info_ventas += "VACÍO (Sin ventas)\n"
+                    r += "* (VACÍO - Registrar con /venta)\n"
                 else:
                     for i, v in enumerate(ventas, 1):
-                        info_ventas += f"FILA {i}:\n"
-                        info_ventas += f"  - Fecha: {v.fecha}\n"
-                        info_ventas += f"  - Producto: {v.producto}\n"
-                        info_ventas += f"  - Cantidad: {v.cantidad_kg} kg\n"
-                        info_ventas += f"  - Parcela Origen: (Rellenar manual o inferir)\n"
-                        info_ventas += f"  - Nº Albarán/Factura: {v.numero_albaran}\n"
-                        info_ventas += f"  - Lote: {v.numero_lote}\n"
-                        info_ventas += f"  - Cliente: {v.cliente_nombre}\n"
-                        info_ventas += f"  - NIF Cliente: {v.cliente_nif}\n"
-                        info_ventas += f"  - RGSEAA: {v.numero_rgseaa}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Fecha: {v.fecha}\n"
+                        r += f"  - Producto: {v.producto}\n"
+                        r += f"  - Cantidad: {v.cantidad_kg} kg\n"
+                        r += f"  - Parcela Origen: (Indicar Nº Orden de Parcela)\n"
+                        r += f"  - Nº Albarán/Factura: {v.numero_albaran}\n"
+                        r += f"  - Nº Lote: {v.numero_lote or 'VACÍO'}\n"
+                        r += f"  - Cliente (Nombre): {v.cliente_nombre}\n"
+                        r += f"  - Cliente (NIF): {v.cliente_nif}\n"
+                        r += f"  - Cliente (RGSEAA): {v.numero_rgseaa or 'VACÍO'}\n"
 
-                # --- SECCIÓN 6: FERTILIZACIÓN ---
+                # ==============================================================================
+                # SECCIÓN 6: FERTILIZACIÓN
+                # ==============================================================================
+                r += "\n--------------------------------------------------------------------------------\n"
+                r += "6. REGISTRO DE FERTILIZACIÓN\n"
+                r += "--------------------------------------------------------------------------------\n"
                 abonados = await sync_to_async(list)(DiarioActividad.objects.filter(
                     explotacion=explotacion,
                     fecha__range=(start_date, end_date),
                     tipo__in=["ABONADO", "RIEGO"]
                 ).select_related('parcela'))
                 
-                info_fertilizacion = "\n**SECCIÓN 6: REGISTRO DE FERTILIZACIÓN**\n"
                 if not abonados:
-                    info_fertilizacion += "VACÍO (Sin fertilización)\n"
+                    r += "* (VACÍO - Registrar con /riego)\n"
                 else:
-                    count_fert = 0
-                    for ab in abonados:
-                        count_fert += 1
+                    for i, ab in enumerate(abonados, 1):
                         parc_ref = ab.parcela.referencia_sigpac if ab.parcela else "TODAS"
                         cultivo = ab.parcela.especie if ab.parcela else ""
-                        prod = ab.producto_nombre if ab.producto_nombre else "Riego"
+                        prod_abono = ab.producto_nombre if ab.producto_nombre else "Agua/Riego"
                         
-                        info_fertilizacion += f"FILA {count_fert}:\n"
-                        info_fertilizacion += f"  - Fecha: {ab.fecha}\n"
-                        info_fertilizacion += f"  - Parcela: {parc_ref}\n"
-                        info_fertilizacion += f"  - Cultivo: {cultivo}\n"
-                        info_fertilizacion += f"  - Tipo Abono/Producto: {prod}\n"
-                        info_fertilizacion += f"  - Nº Albarán: (Ver Observaciones)\n"
-                        info_fertilizacion += f"  - Riqueza NPK: (Ver Observaciones)\n"
-                        info_fertilizacion += f"  - Dosis: {ab.dosis}\n"
-                        info_fertilizacion += f"  - Tipo Fertilizacion: {ab.tipo}\n"
-                        info_fertilizacion += f"  - Observaciones: {ab.observaciones}\n"
+                        r += f"  FILA {i}:\n"
+                        r += f"  - Intervalo Fechas: {ab.fecha}\n"
+                        r += f"  - Nº Orden Parcela: {parc_ref}\n"
+                        r += f"  - Cultivo/Variedad: {cultivo}\n"
+                        r += f"  - Tipo Abono/Producto: {prod_abono}\n"
+                        r += f"  - Nº Albarán: (Ver Observaciones)\n"
+                        r += f"  - Riqueza NPK: (Ver Observaciones)\n"
+                        r += f"  - Dosis: {ab.dosis}\n"
+                        r += f"  - Tipo Fertilización: {ab.tipo} (F/AF/AC)\n"
+                        r += f"  - Observaciones: {ab.observaciones}\n"
 
-                return info_general + info_parcelas + info_tratamientos + info_semillas + info_analisis + info_ventas + info_fertilizacion
+                return r
 
             except Exception as e:
                 return f"Error generando cuaderno completo: {str(e)}"
@@ -935,28 +1202,46 @@ class Command(BaseCommand):
         async def consultar_historico(
             consulta: str,
             anio: int = None,
-            producto: str = None
+            producto: str = None,
+            tipo_actividad: str = None,
+            parcela_ref: str = None,
+            plaga: str = None
         ) -> str:
             """
-            Consulta datos históricos.
+            Consulta datos históricos con filtros avanzados.
             Comando asociado: /consulta
             """
             try:
                 qs = DiarioActividad.objects.all()
-                filters = []
+                filters_desc = []
+                
                 if anio:
                     qs = qs.filter(fecha__year=anio)
-                    filters.append(f"Año {anio}")
+                    filters_desc.append(f"Año {anio}")
                 if producto:
                     qs = qs.filter(producto_nombre__icontains=producto)
-                    filters.append(f"Producto '{producto}'")
+                    filters_desc.append(f"Producto '{producto}'")
+                if tipo_actividad:
+                    qs = qs.filter(tipo__icontains=tipo_actividad)
+                    filters_desc.append(f"Tipo '{tipo_actividad}'")
+                if parcela_ref:
+                    qs = qs.filter(Q(parcela__referencia_sigpac__icontains=parcela_ref) | Q(parcela__especie__icontains=parcela_ref))
+                    filters_desc.append(f"Parcela '{parcela_ref}'")
+                if plaga:
+                    qs = qs.filter(problema_fitosanitario__icontains=plaga)
+                    filters_desc.append(f"Plaga '{plaga}'")
 
                 count = await sync_to_async(qs.count)()
                 
-                resumen = f"Se encontraron {count} registros que coinciden con: {', '.join(filters)}.\n"
+                resumen = f"Se encontraron {count} registros. Filtros: {', '.join(filters_desc) or 'Ninguno'}.\n"
+                
                 if count > 0:
-                    first = await sync_to_async(qs.first)()
-                    resumen += f"Ejemplo: {first.fecha} - {first.tipo} - {first.producto_nombre}"
+                    results = await sync_to_async(list)(qs.select_related('parcela').order_by('-fecha')[:5])
+                    resumen += "Últimos 5 registros:\n"
+                    for r in results:
+                        parc = r.parcela.referencia_sigpac if r.parcela else "N/A"
+                        prod = r.producto_nombre or "Sin producto"
+                        resumen += f"- {r.fecha} | {r.tipo} | {prod} ({r.dosis}) | Parcela: {parc}\n"
                 
                 return resumen
             except Exception as e:

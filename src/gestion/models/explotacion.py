@@ -22,7 +22,7 @@ class Explotacion(models.Model):
         related_name="explotaciones",
     )
     titular = models.ForeignKey(
-        "gestion.Persona",
+        "gestion.Titular",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
