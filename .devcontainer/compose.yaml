@@ -14,7 +14,7 @@ services:
       - "11434:11434"
 
   openwebui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.6.36
     # Disable for Mac users with GPU usage
     depends_on: [ollama]
     env_file:
