@@ -641,59 +641,28 @@ class Command(BaseCommand):
         ) -> str:
             """
             Genera los datos completos para el Documento de Acompañamiento al Transporte (DAT).
-            Prioriza datos de la BD, pero acepta argumentos manuales si no existen registros.
+            Busca datos en los modelos (Transportista, Persona) si se proporcionan NIFs.
             """
             try:
-                # 0. Validaciones
+                # 0. Validaciones básicas
                 if not (len(productos) == len(cantidades) == len(unidades)):
                     return "Error: Las listas de productos, cantidades y unidades deben tener la misma longitud."
                 
                 variedades_safe = variedades + [""] * (len(productos) - len(variedades))
-                
-                # Helper para formatear dirección
-                def fmt_parts(d):
-                    if not d: return {"via": "", "nombre": "", "num": "", "cp": "", "loc": "", "prov": "", "entidad": "", "pais": ""}
-                    return {
-                        "via": d.tipo_via or "", "nombre": d.nombre_via or "", "num": d.numero or "", 
-                        "cp": d.codigo_postal or "", "loc": d.localidad or "", "prov": d.provincia or "",
-                        "entidad": d.entidad_poblacion or d.localidad or "",
-                        "pais": d.pais or "España"
-                    }
 
-                # 1. Recuperar Explotación (Origen) - ESTO ES OBLIGATORIO
-                explotacion = await sync_to_async(Explotacion.objects.select_related('titular', 'direccion').first)()
-                if not explotacion:
-                    return "Error: No hay Explotación configurada como origen."
-
-                # 2. Recuperar Destinatario (Búsqueda o Argumento)
+                # 1. Recuperar Destinatario y Explotación (Base)
                 destinatario = await sync_to_async(Destinatario.objects.filter(
                     nombre__icontains=nombre_destinatario
                 ).select_related('transporte_asignado', 'direccion').first)()
 
-                # Valores por defecto (de argumentos)
-                dest_nombre = nombre_destinatario
-                dest_nif = "(Rellenar)"
-                dest_dir = fmt_parts(None) # Vacío
-                dest_tel = ""
-                dest_movil = ""
-                dest_email = ""
-                vehiculo = None
-                
-                # Si encontramos en BD, sobrescribimos con datos reales
-                if destinatario:
-                    dest_nombre = destinatario.nombre
-                    dest_nif = destinatario.documento
-                    dest_dir = fmt_parts(destinatario.direccion)
-                    vehiculo = destinatario.transporte_asignado
-                    
-                    # Datos extra del destinatario vía Persona
-                    persona_dest = await sync_to_async(Persona.objects.filter(nif=destinatario.documento).first)()
-                    if persona_dest:
-                        dest_tel = persona_dest.telefono or ""
-                        dest_movil = persona_dest.movil or ""
-                        dest_email = persona_dest.email or ""
+                if not destinatario:
+                    return f"Error: Destinatario '{nombre_destinatario}' no encontrado. Créalo con /nuevo_cliente."
 
-                # 3. Datos Transportista (Búsqueda o Argumento)
+                explotacion = await sync_to_async(Explotacion.objects.select_related('titular', 'direccion').first)()
+                if not explotacion:
+                    return "Error: No hay Explotación configurada como origen."
+
+                # 2. LÓGICA INTELIGENTE: TRANSPORTISTA
                 t_nombre = nombre_transportista or "(Rellenar)"
                 t_nif = nif_transportista or "VACÍO"
                 t_tel = telefono_transportista or "VACÍO"
@@ -712,7 +681,7 @@ class Command(BaseCommand):
                             t_tel = persona_transp.telefono or persona_transp.movil or t_tel
                             t_email = persona_transp.email or t_email
 
-                # 4. Datos Autorizado (Lógica inteligente)
+                # 3. LÓGICA INTELIGENTE: AUTORIZADO
                 auth_nom = nombre_autorizado or "VACÍO"
                 auth_nif = nif_autorizado or "VACÍO"
                 
@@ -723,26 +692,17 @@ class Command(BaseCommand):
                 titular = explotacion.titular
                 if auth_nom == "VACÍO" and explotacion.tipo_representacion == 'REPRESENTANTE' and titular:
                     auth_nom = titular.nombre
-                    auth_nif = titular.nif
+                    auth_nif = titular.documento
 
-                # 5. Parcela Origen (SIGPAC)
+                # 4. Buscar Parcela de Origen
                 parcela_origen = await sync_to_async(Parcela.objects.filter(
                     explotacion=explotacion, especie__icontains=productos[0]
                 ).first)()
 
-                sigpac_data = {"prov": "", "mun": "", "pol": "", "par": "", "rec": ""}
-                if parcela_origen:
-                    sigpac_data = {
-                        "prov": explotacion.direccion.provincia if explotacion.direccion else "",
-                        "mun": explotacion.direccion.localidad if explotacion.direccion else "",
-                        "pol": parcela_origen.poligono or "",
-                        "par": parcela_origen.parcela or "",
-                        "rec": parcela_origen.recinto or ""
-                    }
-
-                # 6. Generar Registros en BD (Solo si hay datos mínimos)
+                # 5. Generar Registros en BD
+                vehiculo = destinatario.transporte_asignado
                 numero_dat = f"DAT-{datetime.now().strftime('%Y%m%d-%H%M')}"
-                obs = f"Destino: {dest_nombre}. Eco: {es_ecologico}. Líneas: {len(productos)}"
+                obs = f"Destino: {destinatario.nombre}. Eco: {es_ecologico}. Total líneas: {len(productos)}"
                 
                 nuevo_dat = await sync_to_async(DocumentoDAT.objects.create)(
                     numero=numero_dat,
@@ -754,38 +714,67 @@ class Command(BaseCommand):
                     observaciones=obs
                 )
 
-                # Solo creamos registro de transporte si tenemos destinatario o vehículo válido
-                if destinatario or vehiculo:
-                    p_dest_id = None
-                    if destinatario:
-                         p = await sync_to_async(Persona.objects.filter(nif=destinatario.documento).first)()
-                         if p: p_dest_id = p.id
+                # Corrección: Usar el objeto 'destinatario' (Destinatario) en lugar de 'persona_dest' (Persona)
+                await sync_to_async(RegistroTransporte.objects.create)(
+                    documento_dat=nuevo_dat,
+                    fecha_transporte=datetime.now(),
+                    destinatario=destinatario, # <--- CORREGIDO: Debe ser instancia de Destinatario
+                    vehiculo=vehiculo,
+                    cantidad=cantidades[0],
+                    unidad=unidades[0],
+                    estado="emitido"
+                )
 
-                    await sync_to_async(RegistroTransporte.objects.create)(
-                        documento_dat=nuevo_dat,
-                        fecha_transporte=datetime.now(),
-                        destinatario_id=p_dest_id, 
-                        vehiculo=vehiculo,
-                        cantidad=cantidades[0],
-                        unidad=unidades[0],
-                        estado="emitido"
-                    )
+                # 6. Reporte Final
+                def fmt_parts(d):
+                    if not d: return {"via": "", "nombre": "", "num": "", "cp": "", "loc": "", "prov": "", "entidad": "", "pais": ""}
+                    return {
+                        "via": d.tipo_via or "", "nombre": d.nombre_via or "", "num": d.numero or "", 
+                        "cp": d.codigo_postal or "", "loc": d.localidad or "", "prov": d.provincia or "",
+                        "entidad": d.entidad_poblacion or d.localidad or "",
+                        "pais": d.pais or "España"
+                    }
 
-                # 7. Reporte Final
                 org = fmt_parts(explotacion.direccion)
+                dst = fmt_parts(destinatario.direccion)
                 
-                t_nombre_tit = titular.nombre if titular else explotacion.nombre
-                t_nif_tit = explotacion.nif
-                t_tel_tit = titular.telefono if titular else "VACÍO"
-                t_email_tit = titular.email if titular else "VACÍO"
-                t_movil_tit = titular.movil if titular else ""
+                # Datos Titular
+                t_nombre = titular.nombre if titular else explotacion.nombre
+                t_nif = titular.documento if titular else explotacion.nif
                 
+                t_tel = "VACÍO"
+                t_movil = ""
+                t_email = "VACÍO"
                 check_sexo_h = "[ ]"
                 check_sexo_m = "[ ]"
-                if titular and titular.sexo:
-                    if titular.sexo == 'H': check_sexo_h = "[X]"
-                    if titular.sexo == 'M': check_sexo_m = "[X]"
 
+                if t_nif:
+                    persona_titular = await sync_to_async(Persona.objects.filter(nif=t_nif).first)()
+                    if persona_titular:
+                        t_tel = persona_titular.telefono or "VACÍO"
+                        t_movil = persona_titular.movil or ""
+                        t_email = persona_titular.email or "VACÍO"
+                        if persona_titular.sexo == 'H': check_sexo_h = "[X]"
+                        if persona_titular.sexo == 'M': check_sexo_m = "[X]"
+                
+                # Datos Destinatario (Extra)
+                persona_dest = await sync_to_async(Persona.objects.filter(nif=destinatario.documento).first)()
+                dest_tel = persona_dest.telefono if persona_dest else ""
+                dest_movil = persona_dest.movil if persona_dest else ""
+                dest_email = persona_dest.email if persona_dest else ""
+
+                # Sigpac
+                sigpac_data = {"prov": "", "mun": "", "pol": "", "par": "", "rec": ""}
+                if parcela_origen:
+                    sigpac_data = {
+                        "prov": explotacion.direccion.provincia if explotacion.direccion else "",
+                        "mun": explotacion.direccion.localidad if explotacion.direccion else "",
+                        "pol": parcela_origen.poligono or "",
+                        "par": parcela_origen.parcela or "",
+                        "rec": parcela_origen.recinto or ""
+                    }
+
+                # Transporte
                 v_mat = vehiculo.matricula if vehiculo else "PENDIENTE DE ASIGNAR"
                 fecha_salida = datetime.now().strftime("%d/%m/%Y")
                 hora_salida = datetime.now().strftime("%H:%M")
@@ -805,12 +794,12 @@ class Command(BaseCommand):
 --------------------------------------------------------------------------------
 1. ORIGEN DEL PORTE
 1.1 TITULAR:
-- Nombre/Razón Social: {t_nombre_tit}
-- DNI/NIE/NIF: {t_nif_tit} | Sexo: {check_sexo_h}H {check_sexo_m}M
+- Nombre/Razón Social: {t_nombre}
+- DNI/NIE/NIF: {t_nif} | Sexo: {check_sexo_h}H {check_sexo_m}M
 - Domicilio: {org['via']} {org['nombre']} Nº {org['num']}
 - Entidad Población: {org['entidad']} | Municipio: {org['loc']}
 - Provincia: {org['prov']} | CP: {org['cp']} | País: {org['pais']}
-- Teléfono: {t_tel_tit} | Móvil: {t_movil_tit} | Email: {t_email_tit}
+- Teléfono: {t_tel} | Móvil: {t_movil} | Email: {t_email}
 - Autorizado: {auth_nom} | DNI Autorizado: {auth_nif}
 
 1.2 UNIDAD DE PRODUCCIÓN (SIGPAC):
@@ -820,11 +809,11 @@ class Command(BaseCommand):
 
 --------------------------------------------------------------------------------
 2. DESTINATARIO
-- Nombre/Razón Social: {dest_nombre}
-- DNI/NIE/NIF: {dest_nif}
-- Domicilio: {dest_dir['via']} {dest_dir['nombre']} Nº {dest_dir['num']}
-- Entidad Población: {dest_dir['entidad']} | Municipio: {dest_dir['loc']}
-- Provincia: {dest_dir['prov']} | CP: {dest_dir['cp']} | País: {dest_dir['pais']}
+- Nombre/Razón Social: {destinatario.nombre}
+- DNI/NIE/NIF: {destinatario.documento}
+- Domicilio: {dst['via']} {dst['nombre']} Nº {dst['num']}
+- Entidad Población: {dst['entidad']} | Municipio: {dst['loc']}
+- Provincia: {dst['prov']} | CP: {dst['cp']} | País: {dst['pais']}
 - Teléfono: {dest_tel} | Móvil: {dest_movil} | Email: {dest_email}
 
 --------------------------------------------------------------------------------

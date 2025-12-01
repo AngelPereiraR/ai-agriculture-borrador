@@ -24,13 +24,15 @@ from .models import (
 
 @admin.register(Dummy)
 class DummyAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "creado_en")  # Columnas visibles en la lista
+    list_display = (
+        "id","nombre", "creado_en")  # Columnas visibles en la lista
     search_fields = ("nombre",)  # Barra de búsqueda
 
 
 @admin.register(Direccion)
 class DireccionAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "tipo_via",
         "nombre_via",
         "numero",
@@ -45,7 +47,8 @@ class DireccionAdmin(admin.ModelAdmin):
 
 @admin.register(Persona)
 class PersonaAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "nif", "sexo", "telefono", "email")
+    list_display = (
+        "id","nombre", "nif", "sexo", "telefono", "email")
     search_fields = ("nombre", "nif", "email")
     list_filter = ("sexo",)
 
@@ -53,6 +56,7 @@ class PersonaAdmin(admin.ModelAdmin):
 @admin.register(Explotacion)
 class ExplotacionAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "nombre",
         "nif",
         "numero_registro_nacional",
@@ -94,6 +98,7 @@ class ParcelaAdmin(admin.ModelAdmin):
 @admin.register(Titular)
 class TitularAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "nombre",
         "apellidos",
         "tipo_documento",
@@ -106,7 +111,8 @@ class TitularAdmin(admin.ModelAdmin):
 
 @admin.register(Vehiculo)
 class VehiculoAdmin(admin.ModelAdmin):
-    list_display = ("tipo", "matricula", "marca", "modelo")
+    list_display = (
+        "id","tipo", "matricula", "marca", "modelo")
     search_fields = ("matricula", "marca", "modelo")
     list_filter = ("tipo",)
 
@@ -114,6 +120,7 @@ class VehiculoAdmin(admin.ModelAdmin):
 @admin.register(Destinatario)
 class DestinatarioAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "nombre",
         "tipo_documento",
         "documento",
@@ -184,6 +191,7 @@ class SemillaTratadaAdmin(admin.ModelAdmin):
 @admin.register(RegistroMovimientoProducto)
 class RegistroMovimientoProductoAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "fecha",
         "explotacion",
         "producto",
@@ -206,6 +214,7 @@ class RegistroMovimientoProductoAdmin(admin.ModelAdmin):
 @admin.register(AnalisisLaboratorio)
 class AnalisisLaboratorioAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "fecha",
         "explotacion",
         "material_analizado",
@@ -233,6 +242,7 @@ class TransportistaAdmin(admin.ModelAdmin):
 @admin.register(DocumentoDAT)
 class DocumentoDATAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "numero",
         "fecha_emision",
         "explotacion",
@@ -274,7 +284,8 @@ class RegistroTransporteAdmin(admin.ModelAdmin):
 
 @admin.register(Asesor)
 class AsesorAdmin(admin.ModelAdmin):
-    list_display = ("persona", "numero_inscripcion_ropo", "tipo_carnet")
+    list_display = (
+        "id","persona", "numero_inscripcion_ropo", "tipo_carnet")
     search_fields = ("persona__nombre", "numero_inscripcion_ropo", "tipo_carnet")
     list_filter = ("tipo_carnet",)
 
@@ -282,6 +293,7 @@ class AsesorAdmin(admin.ModelAdmin):
 @admin.register(EquipoAplicacion)
 class EquipoAplicacionAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "descripcion",
         "numero_inscripcion_roma",
         "fecha_adquisicion",
