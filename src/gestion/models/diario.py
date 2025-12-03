@@ -46,7 +46,7 @@ class DiarioActividad(models.Model):
     )
 
     aplicador = models.ForeignKey(
-        "gestion.Persona",
+        "gestion.Personal",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,

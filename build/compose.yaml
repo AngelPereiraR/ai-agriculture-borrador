@@ -2,7 +2,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    # Comment out lines 8-10 for non-NVIDIA GPU or Mac users
+    # Comment out lines 6-8 for non-NVIDIA GPU or Mac users
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all

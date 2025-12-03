@@ -24,8 +24,7 @@ from .models import (
 
 @admin.register(Dummy)
 class DummyAdmin(admin.ModelAdmin):
-    list_display = (
-        "id","nombre", "creado_en")  # Columnas visibles en la lista
+    list_display = ("id", "nombre", "creado_en")  # Columnas visibles en la lista
     search_fields = ("nombre",)  # Barra de búsqueda
 
 
@@ -47,8 +46,7 @@ class DireccionAdmin(admin.ModelAdmin):
 
 @admin.register(Persona)
 class PersonaAdmin(admin.ModelAdmin):
-    list_display = (
-        "id","nombre", "nif", "sexo", "telefono", "email")
+    list_display = ("id", "nombre", "nif", "sexo", "telefono", "email")
     search_fields = ("nombre", "nif", "email")
     list_filter = ("sexo",)
 
@@ -111,8 +109,7 @@ class TitularAdmin(admin.ModelAdmin):
 
 @admin.register(Vehiculo)
 class VehiculoAdmin(admin.ModelAdmin):
-    list_display = (
-        "id","tipo", "matricula", "marca", "modelo")
+    list_display = ("id", "tipo", "matricula", "marca", "modelo")
     search_fields = ("matricula", "marca", "modelo")
     list_filter = ("tipo",)
 
@@ -284,8 +281,7 @@ class RegistroTransporteAdmin(admin.ModelAdmin):
 
 @admin.register(Asesor)
 class AsesorAdmin(admin.ModelAdmin):
-    list_display = (
-        "id","persona", "numero_inscripcion_ropo", "tipo_carnet")
+    list_display = ("id", "persona", "numero_inscripcion_ropo", "tipo_carnet")
     search_fields = ("persona__nombre", "numero_inscripcion_ropo", "tipo_carnet")
     list_filter = ("tipo_carnet",)
 
